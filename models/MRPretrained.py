@@ -85,31 +85,11 @@ class ResnetFeatures(nn.Module):
 class MRPretrained(nn.Module):
     def __init__(self, args_m):
         super(MRPretrained, self).__init__()
-
-        self.args_m = args_m
-
-        if args_m.backbone == 'alexnet':
-            self.fmap_c = 256
-        elif args_m.backbone == 'ed':
-            self.fmap_c = 256
-        elif args_m.backbone in ['densenet121']:
-            self.fmap_c = 1024
-        elif args_m.backbone in ['resnet50', 'resnet101']:
-            self.fmap_c = 2048
-        else:
-            self.fmap_c = 512
-
         self.features = self.get_encoder(args_m)
-        self.avg = nn.AdaptiveAvgPool2d((1, 1))
+        #self.classifier = nn.Conv2d(args_m.fcls, args_m.n_classes, 1, 1, 0)
+        self.classifier = nn.Linear(args_m.fcls, args_m.n_classes)
         self.fuse = args_m.fuse
-
-        # get classifier fc
-        if self.fuse == 'cat':
-            self.fmap_cls = self.fmap_c * 23
-        else:
-            self.fmap_cls = self.fmap_c
-
-        self.classifier = nn.Conv2d(self.fmap_cls, args_m.n_classes, 1, 1, 0)
+        self.avg = nn.AdaptiveAvgPool2d((1, 1))
 
     def get_encoder(self, args_m):
         if args_m.backbone == 'pain':
@@ -142,23 +122,29 @@ class MRPretrained(nn.Module):
         x = self.features(x)  #
         # fusion
         if self.fuse == 'cat':  # concatenate across the slices
-
             x = torch.mean(x, dim=(2, 3))  # (B, 512, 1, 1, 23)
             x, _ = torch.max(x, 2)
-
             x = self.avg(x)  # (B*23, 512, 1, 1)
             x = x.view(B, x.shape[0] // B, x.shape[1], x.shape[2], x.shape[3])  # (B, 23, 512, 1, 1)
             xcat = x.view(B, x.shape[1] * x.shape[2], x.shape[3], x.shape[4])  # (B, 23*512, 1, 1)
-            out = self.classifier_cat(xcat)  # (Classes)
-            out = out[:, :, 0, 0]
-            features = (xcat)
+            out = self.classifier(xcat[:, :, 0, 0])  # (Classes)
+            features = xcat
 
         if self.fuse == 'max':  # max-pooling across the slices
             x = self.avg(x)  # (B*23, 512, 1, 1)
             x = x.view(B, x.shape[0] // B, x.shape[1], x.shape[2], x.shape[3])  # (B, 23, 512, 1, 1)
             features, _ = torch.max(x, 1)  # (B, 512, 1, 1)
-            out = self.classifier(features)  # (Classes)
-            out = out[:, :, 0, 0]
+            out = self.classifier(features[:, :, 0, 0])  # (Classes)
+            #out = out[:, :, 0, 0]
+
+        if self.fuse == 'max2':  # max-pooling across the slices
+            x = torch.mean(x, dim=(2, 3))  # (B, 512, 23)
+            x1 = torch.mean(x1, dim=(2, 3))
+            x0, _ = torch.max(x0, 2)
+            x1, _ = torch.max(x1, 2)
+            out = self.classifier(x0 - x1)  # (Classes)
+            #out = out[:, :, 0, 0]
+
         return out, features
 
 

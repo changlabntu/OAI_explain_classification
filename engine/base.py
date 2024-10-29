@@ -25,6 +25,8 @@ class BaseModel(pl.LightningModule):
 
         self.learning_rate = args.lr
 
+        self.model_save_names = ['net']
+
         # hyperparameters
         self.args = args
         # self.hparams = args
@@ -43,19 +45,10 @@ class BaseModel(pl.LightningModule):
         self.net = net
         self.loss_function = loss_function
         self.get_metrics = metrics
-        #self.optimizer = self.configure_optimizers()
+        self.para = list(self.net.parameters())
+        self.optimizer = self.configure_optimizers()
 
         self.epoch = 0
-
-        # parameters to optimize
-        if self.args.legacy:
-            for param in self.net.module.par_freeze:
-                param.requires_grad = False
-        else:
-            for param in self.net.par_freeze:
-                param.requires_grad = False
-        model_parameters = filter(lambda p: p.requires_grad, self.net.parameters())
-        print('Number of parameters: ' + str(sum([np.prod(p.size()) for p in model_parameters])))
 
         # Begin of training
         self.tini = time.time()
@@ -63,21 +56,20 @@ class BaseModel(pl.LightningModule):
         self.all_out = []
         self.all_loss = []
         self.best_loss = np.inf
-        self.train_loader.dataset.shuffle_images()  # !!! STUPID shuffle again just to make sure
-        self.eval_loader.dataset.shuffle_images()  # !!! STUPID shuffle again just to make sure
 
     def configure_optimizers(self):
+        print('Configuring optimizers...')
+        para = self.para
+        print(len(para))
+        print('Number of parameters in configuring optimizers ', sum(p.numel() for p in para if p.requires_grad))
         optimizer = None
         scheduler = None
         if self.args.op == 'adams':
-            optimizer = torch.optim.Adam(self.net.parameters(), lr=self.learning_rate,
+            optimizer = torch.optim.Adam(para, lr=self.learning_rate,
                                          weight_decay=self.args.weight_decay)
         elif self.args.op == 'sgd':
-            if self.args.legacy:
-                par_freeze = set(self.net.module.par_freeze)
-            else:
-                par_freeze = set(self.net.par_freeze)
-            optimizer = torch.optim.SGD(list(set(self.net.parameters()) - par_freeze),
+            #par_freeze = set(self.net.par_freeze)
+            optimizer = torch.optim.SGD(para,
                                         lr=self.learning_rate,
                                         momentum=0.9,
                                         weight_decay=self.args.weight_decay)
@@ -85,9 +77,6 @@ class BaseModel(pl.LightningModule):
             scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lambda_rule)
             # scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer)
             # scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
-
-        model_parameters = filter(lambda p: p.requires_grad, self.net.parameters())
-        print('Number of parameters: ' + str(sum([np.prod(p.size()) for p in model_parameters])))
 
         return {"optimizer": optimizer, "lr_scheduler": scheduler}
 
@@ -116,34 +105,32 @@ class BaseModel(pl.LightningModule):
 
     # @rank_zero_only
     def validation_step(self, batch, batch_idx=0):
-        if 1:#self.trainer.global_rank == 0:
-            imgs = batch['img']
-            labels = batch['labels']
+        imgs = batch['img']
+        labels = batch['labels']
 
-            # repeat part
-            imgs[0] = imgs[0].repeat(1, 3, 1, 1, 1)
-            imgs[1] = imgs[1].repeat(1, 3, 1, 1, 1)
+        # repeat part
+        imgs[0] = imgs[0].repeat(1, 3, 1, 1, 1)
+        imgs[1] = imgs[1].repeat(1, 3, 1, 1, 1)
 
-            imgs = torch.cat(imgs, 0)
-            output, _ = self.net(imgs)
-            #print(labels)
-            #labels = torch.cat([torch.zeros(labels.shape), torch.ones(labels.shape)]).type(torch.long).cuda()
-            #print(labels)
-            labels = torch.cat([labels, 1 - labels]).type(torch.long).cuda()
+        imgs = torch.cat(imgs, 0)
+        output, _ = self.net(imgs)
+        #print(labels)
+        #labels = torch.cat([torch.zeros(labels.shape), torch.ones(labels.shape)]).type(torch.long).cuda()
+        #print(labels)
+        labels = torch.cat([labels, 1 - labels]).type(torch.long).cuda()
 
-            loss, _ = self.loss_function(output, labels)
-            if not self.args.legacy:
-                self.log('val_loss', loss, on_step=False, on_epoch=True,
-                         prog_bar=True, logger=True, sync_dist=True)
+        loss, _ = self.loss_function(output, labels)
+        if not self.args.legacy:
+            self.log('val_loss', loss, on_step=False, on_epoch=True,
+                     prog_bar=True, logger=True, sync_dist=True)
 
-            # metrics
-            self.all_label.append(labels.cpu())
-            self.all_out.append(output.cpu().detach())
-            self.all_loss.append(loss.detach().cpu().numpy())
+        # metrics
+        self.all_label.append(labels.cpu())
+        self.all_out.append(output.cpu().detach())
+        self.all_loss.append(loss.detach().cpu().numpy())
 
-            return loss
-        else:
-            return 0
+        return loss
+
 
     def save_auc_csv(self, auc, epoch):
         auc = auc.cpu().numpy()
@@ -153,8 +140,8 @@ class BaseModel(pl.LightningModule):
             writer.writerow(auc)
 
     def validation_epoch_end(self, x):
-        self.train_loader.dataset.shuffle_images()
-        self.eval_loader.dataset.shuffle_images()
+        #self.train_loader.dataset.shuffle_images()
+        #self.eval_loader.dataset.shuffle_images()
         if 1:#self.trainer.global_rank == 0:
             all_out = torch.cat(self.all_out, 0)
             all_label = torch.cat(self.all_label, 0)
@@ -174,11 +161,11 @@ class BaseModel(pl.LightningModule):
 
             # saving checkpoints
             if self.epoch % 5 == 0:
-                #file_name = os.path.join(os.environ.get('LOGS'), self.args.prj, 'checkpoints', str(self.epoch) + '_' + str(auc[0].cpu().detach().numpy()) + '.pth')
-                file_name = os.path.join(os.environ.get('LOGS'), self.args.prj, 'checkpoints',
-                                         str(self.epoch) + '.pth')
-                print('save model at: ' + file_name)
-                torch.save(self.net, file_name)
+                for name in self.model_save_names:
+                    file_name = os.path.join(os.environ.get('LOGS'), self.args.prj, 'checkpoints',
+                                             str(self.epoch) + '_' + name + '.pth')
+                    print('save model at: ' + file_name)
+                    torch.save(getattr(self, name), file_name)
 
             self.all_loss = []
             self.epoch += 1

@@ -11,10 +11,11 @@ from dotenv import load_dotenv
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from collections import Counter
-from loaders.data_multi import MultiData as Dataset
+#from loaders.data_multi import MultiData as Dataset
+from loaders.data_multi import PairedDataTif
 import os, glob
 import numpy as np
+from utils.metrics_classification import ClassificationLoss, GetAUC
 
 
 # import torchio as tio
@@ -121,7 +122,7 @@ def train(net, args, train_set, eval_set, loss_function, metrics):
     else:
         # Use pytorch lightning for training, you can ignore it
         checkpoint_callback = ModelCheckpoint(
-            dirpath='checkpoints/' + args.prj + '/',
+            dirpath=os.path.join(os.environ.get('LOGS')) + '/checkpoints/' + args.prj + '/',
             filename='{epoch}-{val_loss:.2f}-{other_metric:.2f}',
             verbose=False,
             monitor='val_loss',
@@ -181,8 +182,9 @@ if __name__ == "__main__":
     # Data
     parser.add_argument('--env', type=str, default=None, help='environment_to_use')
     parser.add_argument('--dataset', type=str, default='womac4')
+    parser.add_argument('--models', type=str, default='siamese')
     parser.add_argument('--load3d', action='store_true', dest='load3d', default=True)
-    parser.add_argument('--direction', type=str, default='ap%bp', help='a2b or b2a')
+    parser.add_argument('--direction', type=str, default='a_b', help='a2b or b2a')
     parser.add_argument('--flip', action='store_true', dest='flip', default=False, help='image flip left right')
     parser.add_argument('--resize', type=int, default=0)
     parser.add_argument('--cropsize', type=int, default=0)
@@ -193,8 +195,10 @@ if __name__ == "__main__":
     parser.add_argument('--fold', type=int, default=None)
     parser.add_argument('--scheme', type=str)
     parser.add_argument('--fcls', type=int, default=512)
+    parser.add_argument('--host', type=str, default='dummy')
 
     # Model-specific Arguments
+
     models = parser.parse_known_args()[0].scheme
     model = getattr(__import__('engine.' + models), models).LitModel
     try:
@@ -210,30 +214,26 @@ if __name__ == "__main__":
     else:
         load_dotenv('env/.t09b')
 
-    args.resize = 384
-    args.cropsize = 256
-
     # Label
     from utils.get_labels import get_labels
-    train_labels, val_labels = get_labels()
+    train_labels, val_labels, full_labels, full_subjects, train_subjects, val_subjects = get_labels()
 
     # Dataset
-    train_set = Dataset(root=os.environ.get('DATASET') + args.dataset + '/train/',
-                        path=args.direction, opt=args, labels=train_labels, mode='train', index=None)
+    train_set = PairedDataTif(root=os.environ.get('DATASET') + args.dataset + '/train/',
+                             path='a_b', labels=train_labels, crop=args.cropsize, mode='test')
     print(len(train_set))
-    eval_set = Dataset(root=os.environ.get('DATASET') + args.dataset + '/val/',
-                       path=args.direction, opt=args, labels=val_labels, mode='test', index=None)
+
+    eval_set = PairedDataTif(root=os.environ.get('DATASET') + args.dataset + '/val/',
+                             path='a_b', labels=val_labels, crop=args.cropsize, mode='test')
     print(len(eval_set))
 
     # Networks
-    if args.scheme == 'cls':
-        from models.MRPretrained import MRPretrained
-        net = MRPretrained(args_m=args)
-    else:
+    if args.scheme == 'siamese':
         from models.MRPretrainedSiamese import MRPretrainedSiamese
         net = MRPretrainedSiamese(args_m=args)
-
-    from utils.metrics_classification import ClassificationLoss, GetAUC
+    else:
+        from models.MRPretrained import MRPretrained
+        net = MRPretrained(args_m=args)
 
     loss_function = ClassificationLoss()
     metrics = GetAUC()
@@ -242,12 +242,13 @@ if __name__ == "__main__":
 
     args.not_tracking_hparams = ['mode', 'port', 'parallel', 'epochs', 'legacy']
 
-    o = train_set.__getitem__(0)
-    print((o['filenames'][0]), o['filenames'][-1])
+    o = train_set.__getitem__(100)
+    #print((o['filenames'][0]), o['filenames'][-1])
     o = eval_set.__getitem__(0)
-    print((o['filenames'][0]), o['filenames'][-1])
+    #print((o['filenames'][0]), o['filenames'][-1])
 
     train(net, args, train_set, eval_set, loss_function, metrics)
 
     #  USAGE
     # python train.py --backbone alexnet --fuse max2 --direction a_b --scheme siamese
+

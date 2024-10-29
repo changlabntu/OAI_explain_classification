@@ -22,21 +22,29 @@ class MRPretrainedSiamese(MRPretrained):
         x0 = self.get_feature(x0)  # (B, 512, 7, 7, 23)
         x1 = self.get_feature(x1)  # (B, 512, 7, 7, 23)
 
+        if self.fuse == 'cat0':  # max-pooling across the slices
+            x0 = torch.mean(x0, dim=(2, 3))  # (B, 512, 23)
+            x1 = torch.mean(x1, dim=(2, 3))
+
+            x0 = x0.view(x0.shape[0], -1)
+            x1 = x1.view(x1.shape[0], -1)
+
+            out = self.classifier(torch.cat([x0, x1], 1))  # (Classes)
+
         if self.fuse == 'max2':  # max-pooling across the slices
             x0 = torch.mean(x0, dim=(2, 3))  # (B, 512, 23)
             x1 = torch.mean(x1, dim=(2, 3))
             x0, _ = torch.max(x0, 2)
             x1, _ = torch.max(x1, 2)
-            out = self.classifier(x0.unsqueeze(2).unsqueeze(3) - x1.unsqueeze(2).unsqueeze(3))  # (Classes)
-            out = out[:, :, 0, 0]
-
-        if self.fuse == 'max3':  # max-pooling across the slices
-            x0 = nn.AdaptiveMaxPool3d((1, 1, 23))(x0)  # (B, 512, 1, 1, 23)
-            x1 = nn.AdaptiveMaxPool3d((1, 1, 23))(x1)
-            x0, _ = torch.max(x0, 4)
-            x1, _ = torch.max(x1, 4)
             out = self.classifier(x0 - x1)  # (Classes)
-            out = out[:, :, 0, 0]
+            #out = out[:, :, 0, 0]
+
+        if self.fuse == 'mean2':  # max-pooling across the slices
+            x0 = torch.mean(x0, dim=(2, 3))  # (B, 512, 23)
+            x1 = torch.mean(x1, dim=(2, 3))
+            x0 = torch.mean(x0, 2)
+            x1 = torch.mean(x1, 2)
+            out = self.classifier(x0 - x1)  # (Classes)
 
         return out, [x0, x1]
 
