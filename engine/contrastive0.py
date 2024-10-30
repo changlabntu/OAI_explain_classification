@@ -53,8 +53,8 @@ class LitModel(BaseModel):
 
         # update optimizer
         self.model_save_names = ['net', 'classifier', 'projector']
-        self.para = list(self.net.parameters()) + list(self.classifier.parameters()) + list(self.center.parameters())
-        #self.optimizer = self.configure_optimizers()
+        self.para = list(self.net.parameters()) + list(self.classifier.parameters()) + list(self.projector.parameters()) + list(self.center.parameters())
+        self.optimizer = self.configure_optimizers()
 
     @staticmethod
     def add_model_specific_args(parent_parser):
@@ -103,7 +103,7 @@ class LitModel(BaseModel):
                  prog_bar=True, logger=True, sync_dist=True)
 
         # total
-        loss = loss_t + loss_center
+        loss = 0 * cls_t + 1 * loss_t + 2 * loss_center
         self.log('train_loss', loss, on_step=False, on_epoch=True,
                  prog_bar=True, logger=True, sync_dist=True)
 
@@ -151,7 +151,7 @@ class LitModel(BaseModel):
                  prog_bar=True, logger=True, sync_dist=True)
 
         # total
-        loss = loss_t + loss_center
+        loss = 0 * cls_v + 1 * loss_t + 2 * loss_center
 
         self.log('val_loss', loss, on_step=False, on_epoch=True,
                  prog_bar=True, logger=True, sync_dist=True)

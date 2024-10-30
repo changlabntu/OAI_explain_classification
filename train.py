@@ -11,7 +11,6 @@ from dotenv import load_dotenv
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-#from loaders.data_multi import MultiData as Dataset
 from loaders.data_multi import PairedDataTif
 import os, glob
 import numpy as np
@@ -174,7 +173,6 @@ def split_moaks(x, split):
 if __name__ == "__main__":
     from dotenv import load_dotenv
     import argparse
-    from loaders.data_multi import PairedData, PairedData3D
 
     parser = args_train()
 

@@ -55,43 +55,6 @@ def quick_save_2d_to_3d(source, destination):
             tiff.imwrite(destination + '/' + s + '.tif', npy)
 
 
-def perform_eval(eval_set):
-    all_label = []
-    all_out = []
-    all_feature0 = []
-    all_feature1 = []
-    for i in tqdm(range(len(eval_set))):
-        batch = eval_set.__getitem__(i)
-
-        imgs = batch['img']
-        labels = batch['labels']
-
-        imgs = [x.unsqueeze(0) for x in imgs]
-        imgs = [x.repeat(1, 3, 1, 1, 1).cuda() for x in imgs]
-
-        imgs = [x - x.min() for x in imgs]
-        imgs = [x / x.max() for x in imgs]
-
-        _, feature0 = net(imgs[0])
-        _, feature1 = net(imgs[1])
-
-        output = classifier(feature0[:, :, 0, 0] - feature1[:, :, 0, 0])
-
-        feature0 = projector(feature0[:, :, 0, 0])
-        feature1 = projector(feature1[:, :, 0, 0])
-
-        # metrics
-        all_label.append(labels)
-        all_out.append(output.cpu().detach())
-        all_feature0.append(feature0.detach().cpu())
-        all_feature1.append(feature1.detach().cpu())
-
-    all_label = np.stack(all_label, 0)
-    all_out = torch.cat(all_out, dim=0)
-    all_feature0 = torch.cat(all_feature0, dim=0)
-    all_feature1 = torch.cat(all_feature1, dim=0)
-    return all_out, all_feature0, all_feature1
-
 
 def flip_by_label(x, labels):
     for i in range(x.shape[0]):
@@ -102,10 +65,6 @@ def flip_by_label(x, labels):
 
 
 if __name__ == "__main__":
-    from dotenv import load_dotenv
-    import argparse
-    from loaders.data_multi import PairedData, PairedData3D
-
     parser = args_train()
 
     # additional arguments for dataset
@@ -145,46 +104,51 @@ if __name__ == "__main__":
     val_labels = full_labels[val_index]
 
     # Model
-    prj_name = 'contrastive0'
-    epoch = 20
+    prj_name = 'contrastive/0_111/'
+    epoch = 10
     net = torch.load('/media/ExtHDD01/logscls/' + prj_name + '/checkpoints/' + str(epoch) + '_net.pth', map_location='cpu').eval().cuda()
     classifier = torch.load('/media/ExtHDD01/logscls/' + prj_name + '/checkpoints/' + str(epoch) + '_classifier.pth', map_location='cpu').eval().cuda()
     projector = torch.load('/media/ExtHDD01/logscls/' + prj_name + '/checkpoints/' + str(epoch) + '_projector.pth', map_location='cpu').eval().cuda()
 
-    # prob a vs b
-    eval_set = PairedDataTif(root=root,
-                             path='a_b', labels=val_labels, crop=args.cropsize, mode='test')
+
+    def perform_eval(eval_set):
+        all_feature = []
+
+        for i in tqdm(range(len(eval_set))):
+            batch = eval_set.__getitem__(i)
+
+            imgs = batch['img']
+            labels = batch['labels']
+
+            imgs = [x.unsqueeze(0) for x in imgs]
+            imgs = [x.repeat(1, 3, 1, 1, 1).cuda() for x in imgs]
+
+            imgs = [x - x.min() for x in imgs]
+            imgs = [x / x.max() for x in imgs]
+
+            _, feature = net(imgs[0])
+            feature = feature[:, :, 0, 0]
+            feature = classifier(feature)
+
+            all_feature.append(feature.detach().cpu())
+
+        all_feature = torch.cat(all_feature, dim=0)
+        return all_feature
+
+    # checking a vs b
+    eval_a = PairedDataTif(root=root,
+                             path='a', labels=val_labels, crop=args.cropsize, mode='test')
+    eval_b = PairedDataTif(root=root,
+                             path='b', labels=val_labels, crop=args.cropsize, mode='test')
     # during model testing, the data is flipped by label, so feature0 = right knee and feature1 = left knee
-    all_out, feature0, feature1 = perform_eval(eval_set)   # feature0 = R, feature1 = L
-    prob0 = torch.nn.Softmax(dim=1)(all_out)#.numpy()
-    print('AUC a vs b: ' + str(metrics(val_labels, all_out)))
+    featureA = perform_eval(eval_a)   # feature0 = R, feature1 = L
+    featureB = perform_eval(eval_b)  # feature0 = R, feature1 = L
+    #featureAcheck = perform_eval(eval_a)  # feature0 = R, feature1 = L
 
     # flip right / left knee back to pain / no pain
-    (probA_B, featureA, featureB) = (flip_by_label(x, val_labels) for x in (prob0, feature0, feature1))
+    #(probA_B, featureA, featureB) = (flip_by_label(x, val_labels) for x in (prob0, feature0, feature1))
 
-    data = [featureA, featureB]
+    data = [featureA, featureB]#, featureAcheck][:2]
     data = [x.squeeze().numpy() for x in data]
 
     plot_TSNE(data)
-
-    #
-
-    featureAR = []
-    featureAL = []
-    featureBR = []
-    featureBL = []
-
-    for i in range(len(featureA)):
-        label = val_labels[i]
-        if label == 1:
-            featureAR.append(featureA[i, :])
-            featureBL.append(featureB[i, :])
-        elif label == 0:
-            featureAL.append(featureA[i, :])
-            featureBR.append(featureB[i, :])
-
-    (featureAR, featureAL, featureBR, featureBL) = (np.stack(x, 0) for x in (featureAR, featureAL, featureBR, featureBL) )
-    data = (featureAR, featureAL, featureBR, featureBL)
-
-    plot_TSNE(data)
-
