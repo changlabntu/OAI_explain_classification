@@ -53,13 +53,19 @@ class LitModel(BaseModel):
 
         # update optimizer
         self.model_save_names = ['net', 'classifier', 'projector']
-        self.para = list(self.net.parameters()) + list(self.classifier.parameters()) + list(self.projector.parameters()) + list(self.center.parameters())
+        self.para = list(self.net.parameters()) + list(self.classifier.parameters()) + list(self.projector.parameters())
+        if not self.hparams.fix_center:
+            self.para = self.para + list(self.center.parameters())
         self.optimizer = self.configure_optimizers()
 
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = parent_parser.add_argument_group("LitModel")
         parser.add_argument('--projection', type=int, default=32)
+        parser.add_argument('--fix_center', action='store_false')
+        parser.add_argument('--lb_cls', type=int, default=1)
+        parser.add_argument('--lb_center', type=int, default=0)
+        parser.add_argument('--lb_tri', type=int, default=0)
         return parent_parser
 
     def training_step(self, batch, batch_idx=0):
@@ -103,7 +109,7 @@ class LitModel(BaseModel):
                  prog_bar=True, logger=True, sync_dist=True)
 
         # total
-        loss = 0 * cls_t + 1 * loss_t + 2 * loss_center
+        loss = self.hparams.lb_cls * cls_t + self.hparams.lb_tri * loss_t + self.hparams.lb_center * loss_center
         self.log('train_loss', loss, on_step=False, on_epoch=True,
                  prog_bar=True, logger=True, sync_dist=True)
 
@@ -151,7 +157,7 @@ class LitModel(BaseModel):
                  prog_bar=True, logger=True, sync_dist=True)
 
         # total
-        loss = 0 * cls_v + 1 * loss_t + 2 * loss_center
+        loss = self.hparams.lb_cls * cls_v + self.hparams.lb_tri * loss_t + self.hparams.lb_center * loss_center
 
         self.log('val_loss', loss, on_step=False, on_epoch=True,
                  prog_bar=True, logger=True, sync_dist=True)
@@ -163,3 +169,6 @@ class LitModel(BaseModel):
 
         return loss
 
+
+#  USAGE
+#  python train.py --backbone alexnet --fuse max --direction a_b --scheme contrastive0 --prj contrastive/0_012 --fcls 256 -b 2

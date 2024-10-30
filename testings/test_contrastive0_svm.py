@@ -33,27 +33,7 @@ def plot_TSNE(data):
         else:
             L1 = tout.shape[0]
         plt.scatter(tout[L0:L1, 0], tout[L0:L1, 1], label=str(i), s=1)
-    #plt.xlim(0, 80)
-    #plt.ylim(0, 80)
     plt.show()
-
-
-def quick_save_2d_to_3d(source, destination):
-    #source = '/home/ghc/Dataset/paired_images/womac4/val/b/'
-    #destination = '/media/ghc/Ghc_data3/OAI_diffusion_final/diffusion_classification/b/'
-    source = '/home/ghc/Dataset/paired_images/womac4/val/a2d/'
-    destination = '/home/ghc/Dataset/paired_images/womac4/val/a/'
-    os.makedirs(destination, exist_ok=True)
-    xlist = sorted(glob.glob(source + '/*'))
-
-    subjects = sorted(list(set([x.rsplit("_", 1)[0].split('/')[-1] for x in xlist])))
-    for s in subjects[:]:
-        print(s)
-        slices = sorted(glob.glob(source + '/' + s + '*'))
-        npy = np.stack([tiff.imread(x) for x in slices], axis=0)
-        if npy.shape[0] == 23:
-            tiff.imwrite(destination + '/' + s + '.tif', npy)
-
 
 
 def flip_by_label(x, labels):
@@ -91,7 +71,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Data parameters
-    root = '/media/ghc/Ghc_data3/OAI_diffusion_final/diffusion_classification/'  # path to your validation data
+    root = '/home/ghc/Dataset/paired_images/womac4/'  # path to your validation data
     args.resize = 384
     args.cropsize = None
 
@@ -104,8 +84,8 @@ if __name__ == "__main__":
     val_labels = full_labels[val_index]
 
     # Model
-    #(prj_name, epoch) = ('contrastive/0_111/', 10)
-    (prj_name, epoch) = ('contrastive/0_011_no_center/', 40)
+    #(prj_name, epoch) = ('contrastive/0_011_no_center/', 40)
+    (prj_name, epoch) = ('contrastive/0_111/', 80)
 
     net = torch.load('/media/ExtHDD01/logscls/' + prj_name + '/checkpoints/' + str(epoch) + '_net.pth', map_location='cpu').eval().cuda()
     classifier = torch.load('/media/ExtHDD01/logscls/' + prj_name + '/checkpoints/' + str(epoch) + '_classifier.pth', map_location='cpu').eval().cuda()
@@ -136,20 +116,37 @@ if __name__ == "__main__":
         all_feature = torch.cat(all_feature, dim=0)
         return all_feature
 
+    # checking train a vs b
+    train_a = PairedDataTif(root=root + 'train/',
+                             path='a', labels=train_labels, crop=args.cropsize, mode='test')
+    train_b = PairedDataTif(root=root + 'train/',
+                             path='b', labels=train_labels, crop=args.cropsize, mode='test')
+    featureAT = perform_eval(train_a)  # features train A = proj(backbone(A))
+    featureBT = perform_eval(train_b)  # features train B = proj(backbone(B))
+
     # checking eval a vs b
-    eval_a = PairedDataTif(root=root,
+    eval_a = PairedDataTif(root=root + 'val/',
                              path='a', labels=val_labels, crop=args.cropsize, mode='test')
-    eval_b = PairedDataTif(root=root,
+    eval_b = PairedDataTif(root=root + 'val/',
                              path='b', labels=val_labels, crop=args.cropsize, mode='test')
-    # during model testing, the data is flipped by label, so feature0 = right knee and feature1 = left knee
-    featureA = perform_eval(eval_a)   # feature0 = R, feature1 = L
-    featureB = perform_eval(eval_b)  # feature0 = R, feature1 = L
-    #featureAcheck = perform_eval(eval_a)  # feature0 = R, feature1 = L
 
-    # flip right / left knee back to pain / no pain
-    #(probA_B, featureA, featureB) = (flip_by_label(x, val_labels) for x in (prob0, feature0, feature1))
+    featureAV = perform_eval(eval_a)
+    featureBV = perform_eval(eval_b)
 
-    data = [featureA, featureB]#, featureAcheck][:2]
+    data = [featureAV, featureBV]
     data = [x.squeeze().numpy() for x in data]
-
     plot_TSNE(data)
+
+    # SVM for classification
+    from sklearn.svm import SVC
+    from sklearn.metrics import accuracy_score
+
+    svm = SVC(kernel='rbf', gamma='auto')
+    svm.fit(torch.cat([featureAT, featureBT], 0).numpy(), np.concatenate([np.ones(len(featureAT)),
+                                                                          np.zeros(len(featureBT))]))
+
+    pred = svm.predict(torch.cat([featureAV, featureBV], 0).numpy())
+    acc = accuracy_score(np.concatenate([np.ones(len(featureAV)), np.zeros(len(featureBV))]), pred)
+    print(acc)
+
+
