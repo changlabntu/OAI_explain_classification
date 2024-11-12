@@ -7,6 +7,13 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 from utils.metrics_classification import GetAUC
 from sklearn.manifold import TSNE
+from sklearn.svm import SVC
+from sklearn.metrics import accuracy_score, roc_auc_score
+from sklearn.manifold import TSNE
+from sklearn.svm import SVC
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, roc_curve, auc
+
 
 metrics = GetAUC()
 
@@ -44,6 +51,15 @@ def flip_by_label(x, labels):
     return x
 
 
+def swap_by_label(x: torch.Tensor, y: torch.Tensor, label: list) -> tuple:
+    mask = torch.tensor(label, dtype=torch.bool, device=x.device)
+    x_new, y_new = x.clone(), y.clone()
+    temp = x_new[mask].clone()
+    x_new[mask] = y_new[mask]
+    y_new[mask] = temp
+    return x_new, y_new
+
+
 if __name__ == "__main__":
     parser = args_train()
 
@@ -64,7 +80,6 @@ if __name__ == "__main__":
     parser.add_argument('--fold', type=int, default=None)
     parser.add_argument('--scheme', type=str)
     parser.add_argument('--fcls', type=int, default=512)
-    parser.add_argument('--host', type=str, default='dummy')
     parser.add_argument('--epoch', type=str)
 
     # Model-specific Arguments
@@ -73,7 +88,7 @@ if __name__ == "__main__":
     # Data parameters
     root = '/home/ghc/Dataset/paired_images/womac4/'  # path to your validation data
     args.resize = 384
-    args.cropsize = None
+    args.cropsize = 256
 
     # Label
     from utils.get_labels import get_labels
@@ -84,8 +99,8 @@ if __name__ == "__main__":
     val_labels = full_labels[val_index]
 
     # Model
-    #(prj_name, epoch) = ('contrastive/0_011_no_center/', 40)
-    (prj_name, epoch) = ('contrastive/0_111/', 80)
+    #(prj_name, epoch) = ('contrastive/0_111/', 40)
+    (prj_name, epoch) = ('contrastive/111', 15)
 
     net = torch.load('/media/ExtHDD01/logscls/' + prj_name + '/checkpoints/' + str(epoch) + '_net.pth', map_location='cpu').eval().cuda()
     classifier = torch.load('/media/ExtHDD01/logscls/' + prj_name + '/checkpoints/' + str(epoch) + '_classifier.pth', map_location='cpu').eval().cuda()
@@ -133,20 +148,81 @@ if __name__ == "__main__":
     featureAV = perform_eval(eval_a)
     featureBV = perform_eval(eval_b)
 
-    data = [featureAV, featureBV]
+    # addpm
+    eval_addpm = PairedDataTif(root=root + 'val/',
+                             path='addpm', labels=val_labels, crop=args.cropsize, mode='test')
+    featureAVddpm = perform_eval(eval_addpm)
+
+
+    def use_classifier():
+        clsAV = classifier((featureAV - featureBV).unsqueeze(0).unsqueeze(0).cuda()).detach().cpu().squeeze().numpy()
+        clsBV = classifier((featureBV - featureAV).unsqueeze(0).unsqueeze(0).cuda()).detach().cpu().squeeze().numpy()
+
+        auc = roc_auc_score(np.concatenate([np.ones(len(featureAV)), np.zeros(len(featureBV))]),
+                            np.concatenate([clsAV, clsBV], 0)[:, 0])
+        print(auc)
+
+
+    def SVM_classification(xTrain, xVal, yTrain, yVal):
+        scaler = StandardScaler()
+        xTrain = scaler.fit_transform(xTrain.numpy())
+        xVal = scaler.transform(xVal.numpy())
+
+        svm = SVC(kernel='rbf', gamma='auto', probability=True)
+        svm.fit(xTrain, yTrain)
+
+        pred = svm.predict(xVal)
+        pred_prob = svm.predict_proba(xVal)
+        acc = accuracy_score(yVal, pred)
+        # AUC
+        fpr, tpr, _ = roc_curve(yVal, pred_prob[:, 1])
+        auc_score = auc(fpr, tpr)
+        print(f"SVM accuracy: {acc:.4f}")
+        print(f"SVM AUC: {auc_score:.4f}")
+
+        return pred_prob
+
+
+    data = [featureAV, featureBV, featureAVddpm][:2]
     data = [x.squeeze().numpy() for x in data]
     plot_TSNE(data)
 
-    # SVM for classification
-    from sklearn.svm import SVC
-    from sklearn.metrics import accuracy_score
+    #  SVM (R - L)
+    featureTR, featureTL = swap_by_label(featureAT, featureBT, train_labels)
+    feature_train = featureTR - featureTL
+    featureVR, featureVL = swap_by_label(featureAV, featureBV, val_labels)
+    feature_val = featureVR - featureVL
 
-    svm = SVC(kernel='rbf', gamma='auto')
-    svm.fit(torch.cat([featureAT, featureBT], 0).numpy(), np.concatenate([np.ones(len(featureAT)),
-                                                                          np.zeros(len(featureBT))]))
+    data = [featureVR, featureVL][:2]
+    data = [x.squeeze().numpy() for x in data]
+    plot_TSNE(data)
 
-    pred = svm.predict(torch.cat([featureAV, featureBV], 0).numpy())
-    acc = accuracy_score(np.concatenate([np.ones(len(featureAV)), np.zeros(len(featureBV))]), pred)
-    print(acc)
+    prob_VRL = SVM_classification(xTrain=feature_train, xVal=feature_val, yTrain=train_labels, yVal=val_labels)
+    probVAB, _ = swap_by_label(torch.from_numpy(prob_VRL[:, 0]), torch.from_numpy(prob_VRL[:, 1]), val_labels)
+
+    # SVM (A, B)
+    feature_train = torch.cat([featureAT, featureBT], 0)
+    feature_val = torch.cat([featureAV, featureBV], 0)
+    prob_AB = SVM_classification(xTrain=feature_train, xVal=feature_val,
+                                 yTrain=torch.cat([torch.ones(len(featureAT)), torch.zeros(len(featureBT))], 0),
+                                 yVal=torch.cat([torch.ones(len(featureAV)), torch.zeros(len(featureBV))], 0))
+
+    # SWAP
+    if 0:
+        featureVR, featureVL = swap_by_label(featureAV, featureAVddpm, val_labels)
+        feature_val = featureVR - featureVL
+        prob_VRL = SVM_classification(xTrain=feature_train, xVal=feature_val, yTrain=train_labels, yVal=val_labels)
+        probVAAddpm, _ = swap_by_label(torch.from_numpy(prob_VRL[:, 0]), torch.from_numpy(prob_VRL[:, 1]), val_labels)
 
 
+        featureVR, featureVL = swap_by_label(featureAVddpm, featureBV, val_labels)
+        feature_val = featureVR - featureVL
+        prob_VRL = SVM_classification(xTrain=feature_train, xVal=feature_val, yTrain=train_labels, yVal=val_labels)
+        probVAddpmB, _ = swap_by_label(torch.from_numpy(prob_VRL[:, 0]), torch.from_numpy(prob_VRL[:, 1]), val_labels)
+        # NO SWAP
+        #prob_AB = SVM_classification(feature_train, feature_val, yTrain, yVal)
+
+        ABsort = np.argsort(probVAB)
+        plt.scatter(np.linspace(0, len(probVAB), len(probVAB)), probVAB[ABsort])
+        plt.scatter(np.linspace(0, len(probVAB), len(probVAB)), probVAddpmB[ABsort])
+        plt.show()

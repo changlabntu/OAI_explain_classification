@@ -36,7 +36,11 @@ class MRPretrainedSiamese(MRPretrained):
             x1 = torch.mean(x1, dim=(2, 3))
             x0, _ = torch.max(x0, 2)
             x1, _ = torch.max(x1, 2)
-            out = self.classifier(x0 - x1)  # (Classes)
+            try:
+                out = self.classifier(x0 - x1)  # (Classes)
+            except:
+                out = self.classifier((x0 - x1).unsqueeze(2).unsqueeze(3))[:, :, 0, 0]  # (Classes)
+                #print(out.shape)
             #out = out[:, :, 0, 0]
 
         if self.fuse == 'mean2':  # max-pooling across the slices

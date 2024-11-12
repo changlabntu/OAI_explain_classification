@@ -62,6 +62,7 @@ class LitModel(BaseModel):
     def add_model_specific_args(parent_parser):
         parser = parent_parser.add_argument_group("LitModel")
         parser.add_argument('--projection', type=int, default=32)
+        parser.add_argument('--diff_cls', action='store_true')
         parser.add_argument('--fix_center', action='store_false')
         parser.add_argument('--lb_cls', type=int, default=1)
         parser.add_argument('--lb_center', type=int, default=0)
@@ -83,9 +84,15 @@ class LitModel(BaseModel):
         _, featureB = self.net(imgs[1])
 
         # classification
-        (featureR, featureL) = swap_by_label(featureA, featureB, labels)
-        output = self.classifier(featureR[:, :, 0, 0] - featureL[:, :, 0, 0])
-        cls_t, _ = self.loss_function(output, labels)
+        if self.hparams.diff_cls:
+            (featureR, featureL) = swap_by_label(featureA, featureB, labels)
+            output = self.classifier(featureR[:, :, 0, 0] - featureL[:, :, 0, 0])
+            cls_t, _ = self.loss_function(output, labels)
+        else:
+            labels = torch.cat([torch.ones(featureA.shape[0]),
+                                                             torch.zeros(featureB.shape[0])]).long().cuda()
+            output = self.classifier(torch.cat([featureA[:, :, 0, 0], featureB[:, :, 0, 0]], dim=0))
+            cls_t, _ = self.loss_function(output, labels)
         self.log('cls_t', cls_t, on_step=False, on_epoch=True,
                  prog_bar=True, logger=True, sync_dist=True)
 
@@ -131,9 +138,15 @@ class LitModel(BaseModel):
         _, featureB = self.net(imgs[1])
 
         # classification
-        (featureR, featureL) = swap_by_label(featureA, featureB, labels)
-        output = self.classifier(featureR[:, :, 0, 0] - featureL[:, :, 0, 0])
-        cls_v, _ = self.loss_function(output, labels)
+        if self.hparams.diff_cls:
+            (featureR, featureL) = swap_by_label(featureA, featureB, labels)
+            output = self.classifier(featureR[:, :, 0, 0] - featureL[:, :, 0, 0])
+            cls_v, _ = self.loss_function(output, labels)
+        else:
+            output = self.classifier(torch.cat([featureA[:, :, 0, 0], featureB[:, :, 0, 0]], dim=0))
+            labels = torch.cat([torch.ones(featureA.shape[0]),
+                                                             torch.zeros(featureB.shape[0])]).long().cuda()
+            cls_v, _ = self.loss_function(output, labels)
         self.log('cls_v', cls_v, on_step=False, on_epoch=True,
                  prog_bar=True, logger=True, sync_dist=True)
 

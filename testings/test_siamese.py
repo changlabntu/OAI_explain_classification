@@ -12,7 +12,6 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from collections import Counter
-from loaders.data_multi import MultiData as Dataset
 import os, glob
 import numpy as np
 from train import args_train
@@ -111,7 +110,6 @@ def flip_by_label(x, labels):
 if __name__ == "__main__":
     from dotenv import load_dotenv
     import argparse
-    from loaders.data_multi import PairedData, PairedData3D
 
     parser = args_train()
 
@@ -163,9 +161,11 @@ if __name__ == "__main__":
 
     # Model
     #ckpt = '/media/ExtHDD01/logscls/cat0/checkpoints/100.pth'
-    #net = torch.load('/media/ExtHDD01/logscls/alexmax2/20.pth', map_location='cpu').eval().cuda()
+    net = torch.load('/media/ExtHDD01/logscls/alexmax2/20.pth', map_location='cpu').eval().cuda()
 
-    net = torch.load('/media/ExtHDD01/logscls/contrastive0/checkpoints/50.pth', map_location='cpu').eval().cuda()
+    #net = torch.load('/media/ExtHDD01/logscls/contrastive0/checkpoints/50.pth', map_location='cpu').eval().cuda()
+
+    #net = torch.load('/media/ExtHDD01/logscls/contrastive/only_cls/checkpoints/100_net.pth', map_location='cpu').eval().cuda()
 
     ## OLD MODEL
     # Model

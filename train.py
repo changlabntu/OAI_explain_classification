@@ -55,6 +55,7 @@ def args_train():
     # misc
     parser.add_argument('--mode', type=str, default='dummy')
     parser.add_argument('--port', type=str, default='dummy')
+    parser.add_argument('--host', type=str, default='dummy')
 
     return parser
 
@@ -193,7 +194,6 @@ if __name__ == "__main__":
     parser.add_argument('--fold', type=int, default=None)
     parser.add_argument('--scheme', type=str)
     parser.add_argument('--fcls', type=int, default=512)
-    parser.add_argument('--host', type=str, default='dummy')
 
     # Model-specific Arguments
 
