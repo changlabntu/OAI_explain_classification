@@ -27,10 +27,12 @@ torch.manual_seed(0)
 torch.cuda.manual_seed_all(0)
 
 
-def plot_TSNE(data):
+def plot_TSNE(data, legends, irange):
     tout = TSNE(n_components=2).fit_transform(np.concatenate(data, 0))
 
-    for i in range(len(data)):
+    p_item = []
+    l_item = []
+    for i in irange:
         if i > 0:
             L0 = np.concatenate(data[:i], 0).shape[0]
         else:
@@ -39,7 +41,9 @@ def plot_TSNE(data):
             L1 = np.concatenate(data[:i + 1], 0).shape[0]
         else:
             L1 = tout.shape[0]
-        plt.scatter(tout[L0:L1, 0], tout[L0:L1, 1], label=str(i), s=1)
+        p_item.append(plt.scatter(tout[L0:L1, 0], tout[L0:L1, 1], label=str(i), s=1))
+        l_item.append(legends[i])
+    plt.legend(p_item, l_item)
     plt.show()
 
 
@@ -58,6 +62,60 @@ def swap_by_label(x: torch.Tensor, y: torch.Tensor, label: list) -> tuple:
     x_new[mask] = y_new[mask]
     y_new[mask] = temp
     return x_new, y_new
+
+
+def use_classifier():
+    clsAV = classifier((featureAV - featureBV).unsqueeze(0).unsqueeze(0).cuda()).detach().cpu().squeeze().numpy()
+    clsBV = classifier((featureBV - featureAV).unsqueeze(0).unsqueeze(0).cuda()).detach().cpu().squeeze().numpy()
+
+    auc = roc_auc_score(np.concatenate([np.ones(len(featureAV)), np.zeros(len(featureBV))]),
+                        np.concatenate([clsAV, clsBV], 0)[:, 0])
+    print(auc)
+
+
+def SVM_classification(xTrain, xVal, yTrain, yVal):
+    scaler = StandardScaler()
+    xTrain = scaler.fit_transform(xTrain.numpy())
+    xVal = scaler.transform(xVal.numpy())
+
+    svm = SVC(kernel='rbf', gamma='auto', probability=True)
+    svm.fit(xTrain, yTrain)
+
+    pred = svm.predict(xVal)
+    pred_prob = svm.predict_proba(xVal)
+    acc = accuracy_score(yVal, pred)
+    # AUC
+    fpr, tpr, _ = roc_curve(yVal, pred_prob[:, 1])
+    auc_score = auc(fpr, tpr)
+    print(f"SVM accuracy: {acc:.4f}")
+    print(f"SVM AUC: {auc_score:.4f}")
+
+    return pred_prob
+
+
+def perform_eval(eval_set):
+    all_feature = []
+
+    for i in tqdm(range(len(eval_set))):
+        batch = eval_set.__getitem__(i)
+
+        imgs = batch['img']
+        labels = batch['labels']
+
+        imgs = [x.unsqueeze(0) for x in imgs]
+        imgs = [x.repeat(1, 3, 1, 1, 1).cuda() for x in imgs]
+
+        imgs = [x - x.min() for x in imgs]
+        imgs = [x / x.max() for x in imgs]
+
+        _, feature = net(imgs[0])
+        feature = feature[:, :, 0, 0]
+        feature = projector(feature)
+
+        all_feature.append(feature.detach().cpu())
+
+    all_feature = torch.cat(all_feature, dim=0)
+    return all_feature
 
 
 if __name__ == "__main__":
@@ -88,7 +146,7 @@ if __name__ == "__main__":
     # Data parameters
     root = '/home/ghc/Dataset/paired_images/womac4/'  # path to your validation data
     args.resize = 384
-    args.cropsize = 256
+    args.cropsize = 0
 
     # Label
     from utils.get_labels import get_labels
@@ -99,37 +157,12 @@ if __name__ == "__main__":
     val_labels = full_labels[val_index]
 
     # Model
-    #(prj_name, epoch) = ('contrastive/0_111/', 40)
-    (prj_name, epoch) = ('contrastive/111', 15)
+    (prj_name, epoch) = ('contrastive/111_run2_lr2/', 80)
+    #(prj_name, epoch) = ('contrastive/only_diff_cls', 40)
 
     net = torch.load('/media/ExtHDD01/logscls/' + prj_name + '/checkpoints/' + str(epoch) + '_net.pth', map_location='cpu').eval().cuda()
     classifier = torch.load('/media/ExtHDD01/logscls/' + prj_name + '/checkpoints/' + str(epoch) + '_classifier.pth', map_location='cpu').eval().cuda()
     projector = torch.load('/media/ExtHDD01/logscls/' + prj_name + '/checkpoints/' + str(epoch) + '_projector.pth', map_location='cpu').eval().cuda()
-
-
-    def perform_eval(eval_set):
-        all_feature = []
-
-        for i in tqdm(range(len(eval_set))):
-            batch = eval_set.__getitem__(i)
-
-            imgs = batch['img']
-            labels = batch['labels']
-
-            imgs = [x.unsqueeze(0) for x in imgs]
-            imgs = [x.repeat(1, 3, 1, 1, 1).cuda() for x in imgs]
-
-            imgs = [x - x.min() for x in imgs]
-            imgs = [x / x.max() for x in imgs]
-
-            _, feature = net(imgs[0])
-            feature = feature[:, :, 0, 0]
-            feature = projector(feature)
-
-            all_feature.append(feature.detach().cpu())
-
-        all_feature = torch.cat(all_feature, dim=0)
-        return all_feature
 
     # checking train a vs b
     train_a = PairedDataTif(root=root + 'train/',
@@ -153,39 +186,10 @@ if __name__ == "__main__":
                              path='addpm', labels=val_labels, crop=args.cropsize, mode='test')
     featureAVddpm = perform_eval(eval_addpm)
 
-
-    def use_classifier():
-        clsAV = classifier((featureAV - featureBV).unsqueeze(0).unsqueeze(0).cuda()).detach().cpu().squeeze().numpy()
-        clsBV = classifier((featureBV - featureAV).unsqueeze(0).unsqueeze(0).cuda()).detach().cpu().squeeze().numpy()
-
-        auc = roc_auc_score(np.concatenate([np.ones(len(featureAV)), np.zeros(len(featureBV))]),
-                            np.concatenate([clsAV, clsBV], 0)[:, 0])
-        print(auc)
-
-
-    def SVM_classification(xTrain, xVal, yTrain, yVal):
-        scaler = StandardScaler()
-        xTrain = scaler.fit_transform(xTrain.numpy())
-        xVal = scaler.transform(xVal.numpy())
-
-        svm = SVC(kernel='rbf', gamma='auto', probability=True)
-        svm.fit(xTrain, yTrain)
-
-        pred = svm.predict(xVal)
-        pred_prob = svm.predict_proba(xVal)
-        acc = accuracy_score(yVal, pred)
-        # AUC
-        fpr, tpr, _ = roc_curve(yVal, pred_prob[:, 1])
-        auc_score = auc(fpr, tpr)
-        print(f"SVM accuracy: {acc:.4f}")
-        print(f"SVM AUC: {auc_score:.4f}")
-
-        return pred_prob
-
-
-    data = [featureAV, featureBV, featureAVddpm][:2]
+    data = [featureAV, featureBV, featureAVddpm][:]
     data = [x.squeeze().numpy() for x in data]
-    plot_TSNE(data)
+    plot_TSNE(data, legends=['AV', 'BV', 'AVddpm'], irange=[0, 2])
+
 
     #  SVM (R - L)
     featureTR, featureTL = swap_by_label(featureAT, featureBT, train_labels)
@@ -207,22 +211,29 @@ if __name__ == "__main__":
                                  yTrain=torch.cat([torch.ones(len(featureAT)), torch.zeros(len(featureBT))], 0),
                                  yVal=torch.cat([torch.ones(len(featureAV)), torch.zeros(len(featureBV))], 0))
 
+    # SVM (A, Addpm)
+    feature_train = torch.cat([featureAT, featureBT], 0)
+    feature_val = torch.cat([featureAV, featureAVddpm], 0)
+    prob_AB = SVM_classification(xTrain=feature_train, xVal=feature_val,
+                                 yTrain=torch.cat([torch.ones(len(featureAT)), torch.zeros(len(featureBT))], 0),
+                                 yVal=torch.cat([torch.ones(len(featureAV)), torch.zeros(len(featureBV))], 0))
+
     # SWAP
     if 0:
         featureVR, featureVL = swap_by_label(featureAV, featureAVddpm, val_labels)
         feature_val = featureVR - featureVL
-        prob_VRL = SVM_classification(xTrain=feature_train, xVal=feature_val, yTrain=train_labels, yVal=val_labels)
+        prob_VRL = SVM_classification(xTrain=featureTR - featureTL, xVal=feature_val, yTrain=train_labels, yVal=val_labels)
         probVAAddpm, _ = swap_by_label(torch.from_numpy(prob_VRL[:, 0]), torch.from_numpy(prob_VRL[:, 1]), val_labels)
 
 
         featureVR, featureVL = swap_by_label(featureAVddpm, featureBV, val_labels)
         feature_val = featureVR - featureVL
-        prob_VRL = SVM_classification(xTrain=feature_train, xVal=feature_val, yTrain=train_labels, yVal=val_labels)
+        prob_VRL = SVM_classification(xTrain=featureTR - featureTL, xVal=feature_val, yTrain=train_labels, yVal=val_labels)
         probVAddpmB, _ = swap_by_label(torch.from_numpy(prob_VRL[:, 0]), torch.from_numpy(prob_VRL[:, 1]), val_labels)
-        # NO SWAP
-        #prob_AB = SVM_classification(feature_train, feature_val, yTrain, yVal)
+
+
 
         ABsort = np.argsort(probVAB)
         plt.scatter(np.linspace(0, len(probVAB), len(probVAB)), probVAB[ABsort])
-        plt.scatter(np.linspace(0, len(probVAB), len(probVAB)), probVAddpmB[ABsort])
+        plt.scatter(np.linspace(0, len(probVAB), len(probVAB)), probVAAddpm[ABsort])
         plt.show()

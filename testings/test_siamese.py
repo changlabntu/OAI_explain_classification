@@ -130,7 +130,7 @@ if __name__ == "__main__":
     parser.add_argument('--fold', type=int, default=None)
     parser.add_argument('--scheme', type=str)
     parser.add_argument('--fcls', type=int, default=512)
-    parser.add_argument('--host', type=str, default='dummy')
+    #parser.add_argument('--host', type=str, default='dummy')
     parser.add_argument('--epoch', type=str)
 
     # Model-specific Arguments
@@ -162,9 +162,7 @@ if __name__ == "__main__":
     # Model
     #ckpt = '/media/ExtHDD01/logscls/cat0/checkpoints/100.pth'
     net = torch.load('/media/ExtHDD01/logscls/alexmax2/20.pth', map_location='cpu').eval().cuda()
-
     #net = torch.load('/media/ExtHDD01/logscls/contrastive0/checkpoints/50.pth', map_location='cpu').eval().cuda()
-
     #net = torch.load('/media/ExtHDD01/logscls/contrastive/only_cls/checkpoints/100_net.pth', map_location='cpu').eval().cuda()
 
     ## OLD MODEL
@@ -176,24 +174,25 @@ if __name__ == "__main__":
     # prob a_b
     eval_set = PairedDataTif(root=root,
                              path='a_b', labels=val_labels, crop=args.cropsize, mode='test')
-    all_out, features0 = perform_eval(eval_set)
-    prob0 = torch.nn.Softmax(dim=1)(all_out)#.numpy()
+    all_out, featuresR_L = perform_eval(eval_set)
+    probR_L = torch.nn.Softmax(dim=1)(all_out)#.numpy()
     print('AUC a vs b: ' + str(metrics(val_labels, all_out)))
-    (prob0, features0) = (flip_by_label(x, val_labels) for x in (prob0, features0))
+    (probA_B, featuresA_B) = (flip_by_label(x, val_labels) for x in (probR_L, featuresR_L)) # pro
 
     eval_set = PairedDataTif(root=root,
                        path='addpm_b', labels=val_labels, crop=args.cropsize, mode='test')
-    all_out, features1 = perform_eval(eval_set)
-    prob1 = torch.nn.Softmax(dim=1)(all_out)#.numpy()
-    print('AUC addpm vs a: ' + str(metrics(val_labels, all_out)))
-    (prob1, features1) = (flip_by_label(x, val_labels) for x in (prob1, features1))
+    all_out, featuresR_L = perform_eval(eval_set)
+    probR_L = torch.nn.Softmax(dim=1)(all_out)#.numpy()
+    print('AUC addpm vs b: ' + str(metrics(val_labels, all_out)))
+    (probAddpm_B, featuresAddpm_B) = (flip_by_label(x, val_labels) for x in (probR_L, featuresR_L))
 
 
     # compare probability
-    pp0 = prob0
-    pp1 = prob1
-    aa = np.argsort(pp0[:,0])
-    plt.scatter(np.linspace(0, 1, pp1.shape[0]), pp1[aa, 0]);#plt.show()
-    plt.scatter(np.linspace(0, 1, pp0.shape[0]), pp0[aa, 0]);plt.xlim(0,1);plt.ylim(0,1);plt.show()
-    plt.scatter(pp0[:, 0], pp1[:, 0]);plt.xlim(0,1);plt.ylim(0,1);plt.show()
+    a_order = np.argsort(probA_B[:,0])
+    plt.scatter(np.linspace(0, 1, probA_B.shape[0]), probA_B[a_order, 0]);#plt.show()
+    plt.scatter(np.linspace(0, 1, probAddpm_B.shape[0]), probAddpm_B[a_order, 0]);plt.xlim(0,1);plt.ylim(0,1)
+    plt.xlabel('N');plt.ylabel('Probability');plt.show()
+
+    plt.scatter(probA_B[:, 0], probAddpm_B[:, 0]);plt.xlim(0,1);plt.ylim(0,1);
+    plt.xlabel('A_B');plt.ylabel('Addpm_B');plt.show()
 

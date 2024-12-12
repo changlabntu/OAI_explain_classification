@@ -54,7 +54,7 @@ class LitModel(BaseModel):
         # update optimizer
         self.model_save_names = ['net', 'classifier', 'projector']
         self.para = list(self.net.parameters()) + list(self.classifier.parameters()) + list(self.projector.parameters())
-        if not self.hparams.fix_center:
+        if self.hparams.move_center:
             self.para = self.para + list(self.center.parameters())
         self.optimizer = self.configure_optimizers()
 
@@ -63,7 +63,7 @@ class LitModel(BaseModel):
         parser = parent_parser.add_argument_group("LitModel")
         parser.add_argument('--projection', type=int, default=32)
         parser.add_argument('--diff_cls', action='store_true')
-        parser.add_argument('--fix_center', action='store_false')
+        parser.add_argument('--move_center', action='store_true')
         parser.add_argument('--lb_cls', type=int, default=1)
         parser.add_argument('--lb_center', type=int, default=0)
         parser.add_argument('--lb_tri', type=int, default=0)
