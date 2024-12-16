@@ -214,7 +214,7 @@ if __name__ == "__main__":
     # SVM (A, Addpm)
     feature_train = torch.cat([featureAT, featureBT], 0)
     feature_val = torch.cat([featureAV, featureAVddpm], 0)
-    prob_AB = SVM_classification(xTrain=feature_train, xVal=feature_val,
+    prob_AddpmB = SVM_classification(xTrain=feature_train, xVal=feature_val,
                                  yTrain=torch.cat([torch.ones(len(featureAT)), torch.zeros(len(featureBT))], 0),
                                  yVal=torch.cat([torch.ones(len(featureAV)), torch.zeros(len(featureBV))], 0))
 

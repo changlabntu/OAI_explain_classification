@@ -119,18 +119,21 @@ class MRPretrained(nn.Module):
         x = x.permute(0, 4, 1, 2, 3)  # (B, 23, 3, 224, 224)
         x = x.reshape(B * x.shape[1], x.shape[2], x.shape[3], x.shape[4])  # (B*23, 3, 224, 224)
         # features
-        x = self.features(x)  #
+        x = self.features(x)  # (B * 23, 512, H, W)
+        # reshape back
+        x = x.reshape(B, 23, x.shape[1], x.shape[2], x.shape[3])  # (B, 23, 512, H, W)
+        x = x.permute(0, 2, 3, 4, 1)  # (B, 512, H, W, 23)
         # fusion
         if self.fuse == 'cat':  # concatenate across the slices
-            x = torch.mean(x, dim=(2, 3))  # (B, 512, 1, 1, 23)
-            x, _ = torch.max(x, 2)
-            x = self.avg(x)  # (B*23, 512, 1, 1)
-            x = x.view(B, x.shape[0] // B, x.shape[1], x.shape[2], x.shape[3])  # (B, 23, 512, 1, 1)
-            xcat = x.view(B, x.shape[1] * x.shape[2], x.shape[3], x.shape[4])  # (B, 23*512, 1, 1)
+            x = torch.mean(x, dim=(2, 3)).unsqueeze(2).unsqueeze(2)  # (B, 512, 1, 1, 23)
+            x = x.permute(0, 4, 1, 2, 3)  # (B, 23, 512, 1, 1)
+            xcat = x.reshape(B, x.shape[1] * x.shape[2], x.shape[3], x.shape[4])  # (B, 23*512, 1, 1)
             out = self.classifier(xcat[:, :, 0, 0])  # (Classes)
             features = xcat
 
         if self.fuse == 'max':  # max-pooling across the slices
+            x = x.permute(0, 4, 1, 2, 3)  # (B, 23, 512, 1, 1)
+            x = x.view(B * x.shape[1], x.shape[2], x.shape[3], x.shape[4])  # (B*23, 512, 1, 1)
             x = self.avg(x)  # (B*23, 512, 1, 1)
             x = x.view(B, x.shape[0] // B, x.shape[1], x.shape[2], x.shape[3])  # (B, 23, 512, 1, 1)
             features, _ = torch.max(x, 1)  # (B, 512, 1, 1)

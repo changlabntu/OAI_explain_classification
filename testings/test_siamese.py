@@ -64,11 +64,13 @@ def quick_save_2d_to_3d(source, destination):
             tiff.imwrite(destination + '/' + s + '.tif', npy)
 
 
-def perform_eval(eval_set):
+def perform_eval(net, classifier, eval_set, combine=None, irange=None):
     all_label = []
     all_out = []
     all_features = []
-    for i in tqdm(range(len(eval_set))):
+    if irange == None:
+        irange = range(len(eval_set))
+    for i in tqdm(range(len(irange))):
         batch = eval_set.__getitem__(i)
 
         imgs = batch['img']
@@ -80,11 +82,23 @@ def perform_eval(eval_set):
         imgs = [x - x.min() for x in imgs]
         imgs = [x / x.max() for x in imgs]
 
+        if combine is not None: # combine imgs[0] and imgs[2]
+            imgs[0] = combine_function(imgs, combine)#torch.cat([imgs[0][:12, :, ::], imgs[2][12:, :, ::]], 0)
+
         # inverse
         if labels == 1:
             imgs = [imgs[1], imgs[0]]
 
-        output, features = net(imgs)
+        # OLD MODEL
+        #output, features = net(imgs)
+        #print(features[0].shape)
+
+        # NEW MODEL
+        f0 = net(imgs[0])[1]
+        f1 = net(imgs[1])[1]
+        output = classifier((f0 - f1)[:, :, 0, 0])
+        features = [f0.squeeze().unsqueeze(0), f1.squeeze().unsqueeze(0)]
+
         features = [x.cpu().detach() for x in features]
         features = torch.stack(features, dim=2)
 
@@ -159,40 +173,93 @@ if __name__ == "__main__":
     train_labels = full_labels[train_index]
     val_labels = full_labels[val_index]
 
-    # Model
-    #ckpt = '/media/ExtHDD01/logscls/cat0/checkpoints/100.pth'
-    net = torch.load('/media/ExtHDD01/logscls/alexmax2/20.pth', map_location='cpu').eval().cuda()
-    #net = torch.load('/media/ExtHDD01/logscls/contrastive0/checkpoints/50.pth', map_location='cpu').eval().cuda()
-    #net = torch.load('/media/ExtHDD01/logscls/contrastive/only_cls/checkpoints/100_net.pth', map_location='cpu').eval().cuda()
 
     ## OLD MODEL
-    # Model
+    # net = torch.load('/media/ExtHDD01/logscls/alexmax2/20.pth', map_location='cpu').cuda()
     #ckpt_path = '/media/ExtHDD01/logscls/'
     #ckpt = sorted(glob.glob(ckpt_path + 'siamese/vgg19max2/checkpoints/*.pth'))[12 - 2]
     #net = torch.load(ckpt, map_location='cpu').cuda().eval()
 
-    # prob a_b
+
+    def plot_prob_comparison(probX, probY, title=''):
+        X_order = np.argsort(probX[:, 0])
+        plt.scatter(np.linspace(0, 1, probX.shape[0]), probX[X_order, 0]);  # plt.show()
+        plt.scatter(np.linspace(0, 1, probY.shape[0]), probY[X_order, 0]);
+        plt.xlim(0, 1);
+        plt.ylim(0, 1)
+        if title == None:
+            title = ''
+        plt.title(title + '  mean P:' + str((probX[:,0]).float().mean().numpy())[:5] + '>' + str((probY[:,0]).float().mean().numpy())[:5])
+        plt.xlabel('N');
+        plt.ylabel('Probability');
+
+
+    def combine_function(imgs0, combine='z0'):
+        #x = torch.cat([x[:, :, :, :, 12:], y[:, :, :, :, :12]], 4)
+        (a, b, addpm, aseg, aeff) = imgs0
+
+        # masking
+        #mask = (((a - addpm) > 0)).float()# * (aeff > 0)).float()
+        #a = a * (1 - (mask > 0) / 1) + addpm * ((mask > 0) / 1)
+
+        if combine == 'full':
+            mask = torch.ones_like(a)
+
+        elif combine.startswith('z'):
+            mask = torch.zeros_like(a)
+            if combine == 'z0':
+                mask[:, :, :, :, :8] = 1
+            elif combine == 'z1':
+                mask[:, :, :, :, 8:16] = 1
+            elif combine == 'z2':
+                mask[:, :, :, :, 16:] = 1
+
+        a = a * (1 - mask) + addpm * mask
+
+        return a
+
+    def main(eval_set, irange, prj, epoch):
+        net = torch.load('/media/ExtHDD01/logscls/' + prj + '/checkpoints/' + epoch + '_net.pth',
+                         map_location='cpu').cuda()
+        classifier = torch.load('/media/ExtHDD01/logscls/' + prj + '/checkpoints/' + epoch + '_classifier.pth',
+                                map_location='cpu').cuda()
+        # a_b
+        all_out, featuresR_L = perform_eval(net, classifier, eval_set, irange=irange)
+        probR_L = torch.nn.Softmax(dim=1)(all_out)#.numpy()
+        print('AUC a vs b: ' + str(metrics(val_labels, all_out)))
+        (probA_B, featuresA_B) = (flip_by_label(x, val_labels) for x in (probR_L, featuresR_L)) # pro
+
+
+        #fig = plt.figure()
+        fig=plt.figure(figsize=(8, 6))
+        plt.subplot(221)
+        #plot_prob_comparison(probA_B, probAddpm_B, title='full')
+
+        for plot, combine in zip([221, 222, 223, 224], ['full', 'z0', 'z1', 'z2']):
+
+            plt.subplot(plot)
+
+            all_out, featuresR_L = perform_eval(net, classifier, eval_set, irange=irange, combine=combine)
+            probR_L = torch.nn.Softmax(dim=1)(all_out)  # .numpy()
+            (probMix, _) = (flip_by_label(x, val_labels) for x in (probR_L, featuresR_L))
+            plot_prob_comparison(probA_B, probMix, title=combine)
+
+        fig.suptitle(prj.replace('/', ' ') + '  epoch: ' + epoch)
+        #plt.show()
+        plt.savefig('outimg/' + prj.replace('/', ' ') + '  epoch: ' + epoch + '.png')
+
+
+    # selected index
+    irange = range(0, 500, 5)
+    val_labels = val_labels[irange]
     eval_set = PairedDataTif(root=root,
-                             path='a_b', labels=val_labels, crop=args.cropsize, mode='test')
-    all_out, featuresR_L = perform_eval(eval_set)
-    probR_L = torch.nn.Softmax(dim=1)(all_out)#.numpy()
-    print('AUC a vs b: ' + str(metrics(val_labels, all_out)))
-    (probA_B, featuresA_B) = (flip_by_label(x, val_labels) for x in (probR_L, featuresR_L)) # pro
+                             path='a_b_addpm_aseg_aeffphi0', labels=val_labels, crop=args.cropsize, mode='test')
 
-    eval_set = PairedDataTif(root=root,
-                       path='addpm_b', labels=val_labels, crop=args.cropsize, mode='test')
-    all_out, featuresR_L = perform_eval(eval_set)
-    probR_L = torch.nn.Softmax(dim=1)(all_out)#.numpy()
-    print('AUC addpm vs b: ' + str(metrics(val_labels, all_out)))
-    (probAddpm_B, featuresAddpm_B) = (flip_by_label(x, val_labels) for x in (probR_L, featuresR_L))
+    # Model
+    root = 'local_probability/'
+    for epoch in [10, 20, 30]:
+        #(prj, epoch) = (root + '100_diff_cls_nopt', '10')
+        (prj, epoch) = (root + '100_diff_cls', str(epoch))
+        #(prj, epoch) = (root + 100_diff_cls_nopt', '10')
 
-
-    # compare probability
-    a_order = np.argsort(probA_B[:,0])
-    plt.scatter(np.linspace(0, 1, probA_B.shape[0]), probA_B[a_order, 0]);#plt.show()
-    plt.scatter(np.linspace(0, 1, probAddpm_B.shape[0]), probAddpm_B[a_order, 0]);plt.xlim(0,1);plt.ylim(0,1)
-    plt.xlabel('N');plt.ylabel('Probability');plt.show()
-
-    plt.scatter(probA_B[:, 0], probAddpm_B[:, 0]);plt.xlim(0,1);plt.ylim(0,1);
-    plt.xlabel('A_B');plt.ylabel('Addpm_B');plt.show()
-
+        main(eval_set, irange, prj, epoch)

@@ -249,4 +249,4 @@ if __name__ == "__main__":
 
     #  USAGE
     # python train.py --backbone alexnet --fuse max2 --direction a_b --scheme siamese
-
+    # python train.py --backbone alexnet --fuse max --direction a_b --scheme contrastive0 --prj contrastive/100_diff_cls --fcls 256 -b 2 --lb_center 0 --lb_tri 0 --diff_cls
