@@ -19,6 +19,7 @@ import tifffile as tiff
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 from utils.metrics_classification import GetAUC
+from utils.data_utils import imagesc
 
 metrics = GetAUC()
 
@@ -121,6 +122,66 @@ def flip_by_label(x, labels):
     return x
 
 
+def fill_nans(arr):
+    mask = np.isnan(arr)
+    arr_copy = arr.copy()
+    valid_idx = np.where(~mask)[0]
+    for i in range(len(arr)):
+        if mask[i]:
+            closest_idx = valid_idx[np.abs(valid_idx - i).argmin()]
+            arr_copy[i] = arr[closest_idx]
+    return arr_copy
+
+
+def approximate_center_point_by_slice(x3d):
+    center_x = []
+    center_y = []
+    for z in range(x3d.shape[0]):
+        x = x3d[z, ::]
+        try:
+            xall, _ = np.nonzero(((x > 85) & (x < 95)) + ((x > 265) & (x < 275)))
+        except:
+            xall = np.array([192, 192])
+
+        center_x.append(xall.mean())
+
+        try:
+            _, yall = np.nonzero(((x > 170) & (x < 190)))
+        except:
+            yall = np.array([192, 192])
+
+        center_y.append(yall.mean())
+
+    # replace nan with closet value
+    center_x = np.array(center_x)
+    center_y = np.array(center_y)
+    center_x = fill_nans(center_x)
+    center_y = fill_nans(center_y)
+    return center_x, center_y
+
+
+def phi0_to_phimap(x3d):
+    center_x, center_y = approximate_center_point_by_slice(x3d)
+    all_angels = []
+    for z in range(x3d.shape[0]):
+        # Create coordinate grids
+        x, y = np.indices(x3d[z, :, :].shape)
+
+        # Calculate relative coordinates to center
+        y_diff = y - center_y[z]
+        x_diff = x - center_x[z]
+
+        # Calculate angles using arctan2 and convert to degrees
+        angles = np.degrees(np.arctan2(y_diff, x_diff))
+
+        # Convert to 0-360 range
+        angles = (angles + 360 + 180) % 360
+        #imagesc(angles)
+
+        all_angels.append(angles)
+    return np.stack(all_angels, 0).astype(np.float32)
+
+
 if __name__ == "__main__":
     from dotenv import load_dotenv
     import argparse
@@ -190,35 +251,60 @@ if __name__ == "__main__":
         if title == None:
             title = ''
         plt.title(title + '  mean P:' + str((probX[:,0]).float().mean().numpy())[:5] + '>' + str((probY[:,0]).float().mean().numpy())[:5])
-        plt.xlabel('N');
-        plt.ylabel('Probability');
-
+        plt.xlabel('N')
+        plt.ylabel('Probability')
 
     def combine_function(imgs0, combine='z0'):
-        #x = torch.cat([x[:, :, :, :, 12:], y[:, :, :, :, :12]], 4)
         (a, b, addpm, aseg, aeff) = imgs0
 
-        # masking
-        #mask = (((a - addpm) > 0)).float()# * (aeff > 0)).float()
-        #a = a * (1 - (mask > 0) / 1) + addpm * ((mask > 0) / 1)
+        aeff = aeff * 360
+        phimap = phi0_to_phimap(aeff[0, 0, :, :, :].permute(2, 0, 1).detach().cpu().numpy())
+        tiff.imwrite('phimap.tif', phimap)
+        phimap = torch.tensor(phimap).permute(1, 2, 0).unsqueeze(0).unsqueeze(0).cuda()
 
+        # masking
         if combine == 'full':
             mask = torch.ones_like(a)
 
         elif combine.startswith('z'):
             mask = torch.zeros_like(a)
             if combine == 'z0':
-                mask[:, :, :, :, :8] = 1
+                mask[:, :, :, :, :16] = 1
             elif combine == 'z1':
-                mask[:, :, :, :, 8:16] = 1
+                mask[:, :, :, :, 8:] = 1
             elif combine == 'z2':
-                mask[:, :, :, :, 16:] = 1
+                mask[:, :, :, :, :] = 1
+
+        elif combine.startswith('s'):
+            if combine == 's0':
+                mask = (aseg > 0) / 1
+            elif combine == 's1':
+                mask = 1 - (aseg > 0) / 1
+
+        elif combine.startswith('d'):
+
+            diff_area = ((a - addpm) > 0.05) / 1
+            #diff_area = torch.ones_like(a)
+            if combine == 'd0':
+                phimap_area = (phimap > -100) / 1
+            elif combine == 'dA':
+                phimap_area = (phimap < 180) / 1
+            elif combine == 'dB':
+                phimap_area = (phimap > 180) / 1
+            elif combine == 'dC':
+                phimap_area = (phimap < 270) / 1
+
+            mask = diff_area * phimap_area
+
+            #tiff.imwrite('phimap.tif', phimap[0, 0, :, :, :].permute(2, 0, 1).detach().cpu().numpy())
+            tiff.imwrite('mask.tif', mask[0, 0, :, :, :].permute(2, 0, 1).detach().cpu().numpy())
 
         a = a * (1 - mask) + addpm * mask
 
         return a
 
-    def main(eval_set, irange, prj, epoch):
+
+    def main(eval_set, irange, prj, epoch, subplot_list, mask_list):
         net = torch.load('/media/ExtHDD01/logscls/' + prj + '/checkpoints/' + epoch + '_net.pth',
                          map_location='cpu').cuda()
         classifier = torch.load('/media/ExtHDD01/logscls/' + prj + '/checkpoints/' + epoch + '_classifier.pth',
@@ -230,12 +316,8 @@ if __name__ == "__main__":
         (probA_B, featuresA_B) = (flip_by_label(x, val_labels) for x in (probR_L, featuresR_L)) # pro
 
 
-        #fig = plt.figure()
-        fig=plt.figure(figsize=(8, 6))
-        plt.subplot(221)
-        #plot_prob_comparison(probA_B, probAddpm_B, title='full')
-
-        for plot, combine in zip([221, 222, 223, 224], ['full', 'z0', 'z1', 'z2']):
+        fig = plt.figure(figsize=(8, 6))
+        for plot, combine in zip(subplot_list, mask_list):#zip([221, 222, 223, 224], ['full', 'z0', 'z1', 'z2']):
 
             plt.subplot(plot)
 
@@ -257,9 +339,17 @@ if __name__ == "__main__":
 
     # Model
     root = 'local_probability/'
-    for epoch in [10, 20, 30]:
+    for epoch in [30]:
         #(prj, epoch) = (root + '100_diff_cls_nopt', '10')
-        (prj, epoch) = (root + '100_diff_cls', str(epoch))
+        (prj, epoch) = (root + 'alexnet_mean_lr0075_nopt', str(epoch))
         #(prj, epoch) = (root + 100_diff_cls_nopt', '10')
 
-        main(eval_set, irange, prj, epoch)
+        main(eval_set, irange, prj, epoch, subplot_list=[221, 222, 223, 224],
+             mask_list=['full', 'd0', 'dA', 'dB'])
+
+
+
+
+
+
+

@@ -140,12 +140,13 @@ class MRPretrained(nn.Module):
             out = self.classifier(features[:, :, 0, 0])  # (Classes)
             #out = out[:, :, 0, 0]
 
-        if self.fuse == 'max2':  # max-pooling across the slices
-            x = torch.mean(x, dim=(2, 3))  # (B, 512, 23)
-            x1 = torch.mean(x1, dim=(2, 3))
-            x0, _ = torch.max(x0, 2)
-            x1, _ = torch.max(x1, 2)
-            out = self.classifier(x0 - x1)  # (Classes)
+        if self.fuse == 'mean':  # max-pooling across the slices
+            x = x.permute(0, 4, 1, 2, 3)  # (B, 23, 512, 1, 1)
+            x = x.view(B * x.shape[1], x.shape[2], x.shape[3], x.shape[4])  # (B*23, 512, 1, 1)
+            x = self.avg(x)  # (B*23, 512, 1, 1)
+            x = x.view(B, x.shape[0] // B, x.shape[1], x.shape[2], x.shape[3])  # (B, 23, 512, 1, 1)
+            features = torch.mean(x, 1)  # (B, 512, 1, 1)
+            out = self.classifier(features[:, :, 0, 0])  # (Classes)
             #out = out[:, :, 0, 0]
 
         return out, features
